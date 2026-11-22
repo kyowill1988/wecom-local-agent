@@ -91,6 +91,9 @@ class LLMBackend:
         self.model = model
         self.max_rounds = max_rounds
         self.timeout = timeout
+        # 额外的工具 schema（OpenAI function-calling 格式），由 agent 在运行时注入
+        # （如本机 MCP server 暴露的工具）。与内置 TOOLS 合并后一起交给模型。
+        self.extra_tools: list[dict] = []
 
     def available(self) -> tuple[bool, str]:
         if not self.api_key:
@@ -134,9 +137,11 @@ class LLMBackend:
 
         import asyncio
 
+        tools = TOOLS + list(self.extra_tools)
+
         for round_no in range(1, self.max_rounds + 1):
             try:
-                data = await asyncio.to_thread(self._chat, messages, TOOLS)
+                data = await asyncio.to_thread(self._chat, messages, tools)
             except Exception as e:
                 return {"ok": False, "text": "", "error": f"调用大模型失败：{e}"}
 
@@ -166,7 +171,11 @@ class LLMBackend:
                     result = f"错误：未实现的工具 {name}"
                 else:
                     try:
-                        result = impl(args)
+                        r = impl(args)
+                        # 工具实现可以是同步函数，也可以是协程（如 MCP 异步调用）
+                        if asyncio.iscoroutine(r):
+                            r = await r
+                        result = r
                     except Exception as e:
                         result = f"工具执行出错：{e}"
                 messages.append(

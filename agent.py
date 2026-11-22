@@ -24,6 +24,7 @@ sys.path.insert(0, str(BASE))
 
 from executor import WorkBuddyExecutor, wrap_prompt          # noqa: E402
 from llm_runner import LLMBackend                            # noqa: E402
+from mcp_client import MCPClient                             # noqa: E402
 from skills.gitlab_skill import GitLabClient, fmt_commits, fmt_projects  # noqa: E402
 from skills import router                                     # noqa: E402
 from wecom_client import WecomBot                             # noqa: E402
@@ -113,10 +114,46 @@ class DigitalTwin:
             timeout=llm_cfg.get("timeout", 90),
         )
         self.runner_mode = cfg.get("runner", {}).get("mode", "auto")
+        # 白名单：只有这些 userid 能触发指令（公司数据经 MCP 出到手机，先只认自己）
+        self.allow_userids: set[str] = set(cfg.get("bot", {}).get("allow_userids", []) or [])
         self.dedup = Dedup(BASE / cfg["bot"].get("state_file", "state/processed.json"))
         self.bot_name = cfg["bot"].get("name", "数字分身")
+        # MCP servers（本机已有能力），懒启动，失败不阻断主链路
+        self.mcp: MCPClient | None = self._build_mcp(cfg.get("mcp", {}))
+        self._mcp_tools_cache: dict[str, dict] = {}
+        self._mcp_ready = False
         self.bot.on("message.text", self.on_text)
         self.bot.on("connected", self.on_connected)
+
+    async def _ensure_mcp_ready(self) -> bool:
+        """懒启动 MCP server 并缓存工具清单。失败返回 False，不抛异常。"""
+        if self._mcp_ready:
+            return True
+        if self.mcp is None:
+            return False
+        try:
+            await self.mcp.start()
+            tools = await self.mcp.list_tools()
+            self._mcp_tools_cache = {t["name"]: t for t in tools}
+            self._mcp_ready = True
+            logger.info("MCP 就绪，工具 %d 个：%s", len(tools), ", ".join(self._mcp_tools_cache))
+            return True
+        except Exception as e:
+            logger.error("MCP 启动失败：%s", e)
+            return False
+
+    def _build_mcp(self, mcp_cfg: dict) -> MCPClient | None:
+        """按配置构造 MCP 客户端（可扩展为多个 server，当前先支持一个）。"""
+        command = mcp_cfg.get("command")
+        if not command:
+            return None
+        if isinstance(command, str):
+            command = [command]
+        return MCPClient(
+            command=list(command),
+            cwd=mcp_cfg.get("cwd") or None,
+            env=mcp_cfg.get("env") or {},
+        )
 
     async def on_connected(self, frame):
         logger.info("长连接建立完成，等待群消息…")
@@ -127,6 +164,16 @@ class DigitalTwin:
         msgid = body.get("msgid")
         if self.dedup.seen(msgid):
             logger.info(f"消息 {msgid} 已处理，跳过")
+            return
+
+        # 白名单鉴权：未授权 userid 直接拒绝，不执行任何能力
+        userid = body.get("from", {}).get("userid") or ""
+        if self.allow_userids and userid not in self.allow_userids:
+            logger.warning(f"拒绝未授权 userid={userid} 的消息")
+            try:
+                await self.bot.reply(frame, "⛔ 抱歉，你不在本机器人的授权名单里。")
+            except Exception as e:
+                logger.warning(f"拒绝回复失败: {e}")
             return
 
         raw = body.get("text", {}).get("content", "")
@@ -231,6 +278,9 @@ class DigitalTwin:
         lines.append(f"• CLI 后端：{'✅ 可用' if ok else '⚠️ ' + msg}")
         llm_ok, llm_msg = self.llm.available()
         lines.append(f"• LLM 后端：{'✅ 可用（%s）' % self.llm.model if llm_ok else '⚠️ ' + llm_msg}")
+        if self.mcp is not None:
+            mcp_state = f"✅ {len(self._mcp_tools_cache)} 个工具" if self._mcp_ready else "⚠️ 未就绪"
+            lines.append(f"• MCP（Metabase）：{mcp_state}")
         lines.append(f"• 当前模式：`{self.runner_mode}`")
         g = self.cfg["gitlab"]
         if g.get("token"):
@@ -279,12 +329,28 @@ class DigitalTwin:
         return "\n".join(f"#{p['id']} {p['status']} ({p['ref']})" for p in data) or "暂无流水线记录"
 
     def _tools(self) -> dict:
-        return {
+        tools = {
             "gitlab_commits": self._tool_commits,
             "gitlab_search_projects": self._tool_search_projects,
             "gitlab_branches": self._tool_branches,
             "gitlab_pipelines": self._tool_pipelines,
         }
+        # 并入 MCP 工具：包装成同步签名（内部用 asyncio.run 桥接）
+        for name in self._mcp_tool_names:
+            tools[name] = self._make_mcp_tool(name)
+        return tools
+
+    def _make_mcp_tool(self, name: str):
+        def _impl(args: dict):
+            if self.mcp is None:
+                return "错误：MCP server 未配置"
+            return self.mcp.call_tool(name, args or {})  # 返回协程，由 llm_runner await
+        return _impl
+
+    @property
+    def _mcp_tool_names(self) -> list[str]:
+        """已加载的 MCP 工具名（未启动时为空）。"""
+        return list(self._mcp_tools_cache.keys())
 
     async def do_chat(self, text: str):
         """自然语言指令：按 runner.mode 选择执行后端。"""
@@ -296,6 +362,10 @@ class DigitalTwin:
             if not llm_ok:
                 return f"❌ 已指定 llm 后端但未配置：{llm_msg}"
             logger.info("使用 LLM 后端处理")
+            # 注入 MCP 工具（懒加载，失败则退回只有 GitLab 工具）
+            self.llm.extra_tools = []
+            if self.mcp is not None and await self._ensure_mcp_ready():
+                self.llm.extra_tools = self.mcp.tools_as_openai(list(self._mcp_tools_cache.values()))
             res = await self.llm.run(text, self._tools())
             backend = "LLM"
         elif mode == "cli" or (mode == "auto" and cli_ok):
@@ -354,6 +424,11 @@ async def main():
         await task
     except asyncio.CancelledError:
         pass
+    if twin.mcp is not None:
+        try:
+            await twin.mcp.stop()
+        except Exception as e:
+            logger.warning(f"MCP 关闭异常：{e}")
     logger.info("已退出")
 
 

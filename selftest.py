@@ -8,6 +8,7 @@
     .venv/bin/python selftest.py gitlab    # 只测 GitLab
     .venv/bin/python selftest.py cli       # 只测 WorkBuddy CLI
     .venv/bin/python selftest.py ws        # 只测长连接鉴权（需要 secret）
+    .venv/bin/python selftest.py mcp       # 只测本机 MCP（Metabase）连通性
 """
 
 import asyncio
@@ -168,6 +169,42 @@ def test_ws(cfg):
             print(f"       服务端返回: {result['error']}")
 
 
+# ---------------- 5. 本机 MCP（Metabase） ----------------
+def test_mcp(cfg):
+    print("\n─── 5. 本机 MCP（Metabase）───")
+    from mcp_client import MCPClient
+
+    m = cfg.get("mcp", {})
+    command = m.get("command")
+    if not command:
+        print(f"  {WARN} 未配置 mcp.command，跳过（自然语言查数不可用）")
+        return
+    client = MCPClient(list(command), cwd=m.get("cwd") or None, env=m.get("env") or {})
+    try:
+        asyncio.run(_mcp_probe(client))
+    except Exception as e:
+        print(f"  {FAIL} MCP 启动/调用失败：{e}")
+
+
+async def _mcp_probe(client):
+    await client.start()
+    tools = await client.list_tools()
+    print(f"  {OK} server 启动，暴露 {len(tools)} 个工具")
+    for t in tools:
+        print(f"      - {t['name']}: {t['description'].splitlines()[0][:48]}")
+    # 真实调用 mb_health 验证连通
+    if "mb_health" in [t["name"] for t in tools]:
+        try:
+            r = await client.call_tool("mb_health", {})
+            import json
+            d = json.loads(r)
+            dbs = [x["name"] for x in d.get("databases", [])]
+            print(f"  {OK} mb_health 连通，可访问 {len(dbs)} 个库：{', '.join(dbs[:5])}")
+        except Exception as e:
+            print(f"  {FAIL} mb_health 调用失败：{e}")
+    await client.stop()
+
+
 # ---------------- main ----------------
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else None
@@ -199,6 +236,8 @@ def main():
         test_cli(cfg)
     if only in (None, "ws"):
         test_ws(cfg)
+    if only in (None, "mcp"):
+        test_mcp(cfg)
 
     print("\n" + "=" * 60)
     print("自检结束。未通过项按提示补充配置后重跑。")

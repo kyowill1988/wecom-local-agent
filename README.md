@@ -111,6 +111,23 @@ chmod 600 config.yaml
 
 自然语言的活儿可选两种后端：直连大模型（`llm.api_key`），或调用本机 CLI（`workbuddy.cli_path`）。都不配也不影响内置指令。
 
+**接入本机 MCP（可选，推荐）**：把已有的 MCP server 接进来，自然语言指令就能调用它的工具。例如接入 Metabase 已保存卡片查询服务后，群里说「查一下卡片 1122 的登录日志」就能直接取数。配置：
+
+```yaml
+mcp:
+  command: ["/usr/bin/python3", "/path/to/metabase-cards-mcp/server.py"]
+```
+
+**userid 白名单（建议开启）**：接入了 MCP 后，机器人能查你本机/内网的数据，务必限制谁能用它：
+
+```yaml
+bot:
+  allow_userids:
+    - "你的 userid"   # 给机器人发句话，从日志或 aibot sessions 里看 from.userid
+```
+
+留空 = 不限制。给机器人发消息的每个人都能触发指令，接 MCP 前先想清楚。
+
 ### 4. 启动
 
 ```bash
@@ -128,11 +145,13 @@ tail -f logs/bot.log      # 看到「长连接建立完成，等待群消息…�
 | `pipelines <项目> [分支]` | 流水线状态 |
 | `branches <项目>` | 分支列表 |
 | `projects <关键词>` | 搜索项目 |
-| `status` | 连通性自检（长连接 / CLI / LLM / GitLab 四项） |
+| `status` | 连通性自检（长连接 / CLI / LLM / GitLab / MCP） |
 | `help` | 帮助 |
-| 其它任何话 | 交给大模型或本机 CLI 处理 |
+| 其它任何话 | 交给大模型处理，可调用内置 + MCP 工具 |
 
 示例：`@数字分身 pipelines payment-service main`
+
+接入 MCP 后，自然语言即可查数，例如：`@数字分身 查一下卡片 1122 的登录日志明细`（大模型会自动走「搜卡 → 看参数 → 取数」的纪律，缺参数会回问而不是瞎猜）。
 
 ## 常见问题
 
@@ -151,14 +170,14 @@ tail -f logs/bot.log      # 看到「长连接建立完成，等待群消息…�
 ## 架构
 
 ```text
-群里 @机器人 "commits payment-service"
+群里 @机器人 "commits payment-service" / "查一下卡片 1122 的数据"
         │
         ▼
 企业微信云 ──WebSocket 长连接──▶ agent.py（本机守护进程）
                                       │
                                       ├─ 内置指令 ──▶ GitLab API
                                       │
-                                      └─ 其它指令 ──▶ LLM API ／ 本机 CLI
+                                      └─ 其它指令 ──▶ LLM API ──▶ 本机 MCP（Metabase 等）
         │
         ▼
 结果以 markdown 推送回群
@@ -171,7 +190,8 @@ wecom-local-agent/
 ├── agent.py              # 守护进程：消息分发与编排
 ├── wecom_client.py       # 长连接客户端（鉴权 / 心跳 / 重连 / 收发）
 ├── executor.py           # 本机 CLI 执行器
-├── llm_runner.py         # OpenAI 兼容后端 + 工具调用
+├── llm_runner.py         # OpenAI 兼容后端 + 工具调用（含 MCP 工具编排）
+├── mcp_client.py         # 通用 stdio MCP 客户端（接本机 MCP server）
 ├── skills/
 │   ├── router.py         # 指令解析与路由
 │   └── gitlab_skill.py   # GitLab 查询与结果格式化
@@ -186,6 +206,8 @@ wecom-local-agent/
 - **为什么 `msgid` 要落盘**：断线重连时服务端会重推消息，不去重就会把同一条指令执行两遍。`state/processed.json` 保留最近 500 条。
 - **为什么要有双后端 + auto 降级**：本机 CLI 依赖桌面端开着，LLM 依赖网络和额度。任何一个挂了，另一个还能用，不至于让机器人整个哑掉。
 - **为什么内置指令不交给大模型**：`commits`、`pipelines` 这类是确定性查询，走 API 直连又快又省钱，还不会产生幻觉。
+- **为什么不重造能力、只接 MCP**：本机已经有跑通的 MCP server（如 Metabase 查询），数字分身只做「把它们的工具暴露给企微」，不重复实现。MCP 工具 schema 在运行时 `tools/list` 动态拉取，换 server 或加工具都不用改代码。
+- **为什么要有 userid 白名单**：接 MCP 后机器人能查内网数据，等于给手机开了条查数通道。默认只认自己的 userid，是最低成本的第一道闸。
 - **为什么不用主动拉群消息**：会话存档接口需要企业单独开通（返回 `853006`），所以只能被动接收推送。
 
 ## 已知约束
