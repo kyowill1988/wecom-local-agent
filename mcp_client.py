@@ -162,9 +162,14 @@ class MCPClient:
         self._tools = tools
         return tools
 
-    async def call_tool(self, name: str, arguments: dict, timeout: float = 120.0) -> str:
+    async def call_tool(self, name: str, arguments: dict, timeout: float = 60.0) -> str:
         """调用一个工具，返回其文本内容（content[].text 拼接）。"""
-        result = await self._call("tools/call", {"name": name, "arguments": arguments}, timeout=timeout)
+        try:
+            result = await self._call("tools/call", {"name": name, "arguments": arguments}, timeout=timeout)
+        except MCPError as e:
+            # 超时/进程异常：包装成对 LLM 有引导意义的信息，避免它反复重试同一张重卡
+            raise MCPError(f"工具 {name} 调用失败（{e}）。若为超时，说明该查询太重，请改用更轻量的卡片、"
+                           f"缩小时间范围或减少返回行数，不要用相同参数重试。") from e
         texts = []
         for item in result.get("content", []):
             if item.get("type") == "text":

@@ -81,11 +81,20 @@ SYSTEM_PROMPT = """你是运行在企业微信群里、名为「数字分身」�
 3. 回答简洁，控制在 300 字以内，适合聊天窗口阅读。
 4. 使用简单的 markdown 排版，不要用 HTML 和表格。
 5. 用中文回答。
+
+调用 Metabase 工具（mb_*）时的取数纪律：
+6. 查「数量/汇总」类指标时，先用 mb_search_cards 搜「汇总」「统计」「数量」「列表」等关键词，
+   优先选汇总卡，不要选「健康度」「明细」「日志」这类重分析卡——它们查询很慢，可能超时。
+7. 执行卡片前必须先 mb_describe_card 确认参数名（大小写敏感）和必填项；缺必填参数就回问用户，不要瞎猜。
+8. mb_run_card 默认 limit 50、mask=true 就够；不要拉全量（limit 不要超过 200），不要关脱敏（mask 保持 true）。
+   需要全量明细时改用 mb_export_card。
+9. 某个工具超时或报错，说明该查询太重，换更轻量的卡片或缩小范围，不要用相同参数重试。
+10. 同一张卡连续失败两次就放弃，向用户说明查不到的原因，而不是无限换卡重试。
 """
 
 
 class LLMBackend:
-    def __init__(self, base_url: str, api_key: str, model: str, max_rounds: int = 5, timeout: int = 90):
+    def __init__(self, base_url: str, api_key: str, model: str, max_rounds: int = 12, timeout: int = 90):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
@@ -182,4 +191,19 @@ class LLMBackend:
                     {"role": "tool", "tool_call_id": tc.get("id"), "content": str(result)[:4000]}
                 )
 
+        # 到达轮次上限：不再继续调工具，而是请模型基于已查到的信息给结论
+        try:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "工具调用次数已达上限。请基于上面已经查到的数据，直接给出你能确定的结论；"
+                    "确实查不到的，明确说明还缺什么信息，不要继续调用工具。",
+                }
+            )
+            data = await asyncio.to_thread(self._chat, messages, None)
+            content = (data["choices"][0]["message"].get("content") or "").strip()
+            if content:
+                return {"ok": True, "text": content, "error": None}
+        except Exception:
+            pass
         return {"ok": False, "text": "", "error": f"工具调用轮数超过上限（{self.max_rounds}）"}

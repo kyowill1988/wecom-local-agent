@@ -71,8 +71,8 @@ llm:
   api_key: ""
   model: "deepseek-chat"
 
-  # 单次对话最多几轮工具调用
-  max_tool_rounds: 5
+  # 单次对话最多几轮工具调用（查数链路「搜卡→看参数→取数→导出」通常要 6-10 轮，别设太小）
+  max_tool_rounds: 12
   timeout: 90
 
 bot:

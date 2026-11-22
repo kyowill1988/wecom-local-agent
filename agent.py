@@ -110,7 +110,7 @@ class DigitalTwin:
             base_url=llm_cfg.get("base_url", ""),
             api_key=llm_cfg.get("api_key", ""),
             model=llm_cfg.get("model", ""),
-            max_rounds=llm_cfg.get("max_tool_rounds", 5),
+            max_rounds=llm_cfg.get("max_tool_rounds", 12),
             timeout=llm_cfg.get("timeout", 90),
         )
         self.runner_mode = cfg.get("runner", {}).get("mode", "auto")
