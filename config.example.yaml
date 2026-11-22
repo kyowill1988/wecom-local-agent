@@ -1,0 +1,86 @@
+# ============================================================
+# 数字分身 · 配置模板
+#
+# 用法：
+#   cp config.example.yaml config.yaml
+#   chmod 600 config.yaml          # 里面是密钥，别让其他用户读
+#   然后把下面标了「必填」的三处填上
+#
+# config.yaml 已在 .gitignore 里，不会被提交。
+# ============================================================
+
+wecom:
+  # 【必填】企业微信智能机器人 Bot ID
+  # 获取路径：企业微信管理后台 → 安全与管理 → 管理工具 → 智能机器人
+  #          → 创建机器人 → 右上角「编辑」→ API 模式创建 → 使用长连接
+  bot_id: ""
+
+  # 【必填】长连接专用 Secret
+  # 注意：这是「使用长连接」模式下生成的 Secret，
+  #      与 URL 回调模式的 Token / EncodingAESKey 不是一回事，别填错。
+  secret: ""
+
+  # WebSocket 地址，官方默认值，一般不用改
+  ws_url: "wss://openws.work.weixin.qq.com"
+
+  # 心跳间隔（秒）
+  heartbeat_interval: 30
+
+gitlab:
+  # GitLab 服务地址。自建实例写自己的域名或 IP，官方写 https://gitlab.com
+  url: "https://gitlab.com"
+
+  # 【必填】Personal Access Token，需要 api 权限
+  # 获取：GitLab → 头像 → Preferences → Access Tokens → 勾 api → 创建
+  token: ""
+
+  # 群内指令不指定项目时，用这个作为默认项目（项目路径或数字 ID）
+  default_project: ""
+
+  # 默认分支
+  default_branch: "main"
+
+  # 默认返回条数
+  default_limit: 10
+
+workbuddy:
+  # WorkBuddy 内置 CLI 的路径。
+  # 只有走「cli」后端处理自然语言指令时才需要。
+  # macOS 默认安装位置如下；不确定就留空，改用 llm 后端。
+  cli_path: "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"
+
+  # 通用指令使用的模型，留空用默认
+  model: ""
+
+  # 单条指令超时（秒）。企业微信回复窗口是 3 分钟，超时后走异步推送
+  timeout: 150
+
+  # 允许 CLI 使用的工具，留空表示不限制
+  allowed_tools: ""
+
+runner:
+  # 自然语言指令的执行后端：
+  #   llm  — 直连 OpenAI 兼容接口（推荐，不依赖桌面端是否打开）
+  #   cli  — 调用 WorkBuddy 内置 CLI
+  #   auto — 优先 llm，未配置则回落到 cli
+  mode: "auto"
+
+llm:
+  # OpenAI 兼容接口。DeepSeek / 通义 / 智谱 / 本地 Ollama 都可以
+  base_url: "https://api.deepseek.com/v1"
+  api_key: ""
+  model: "deepseek-chat"
+
+  # 单次对话最多几轮工具调用
+  max_tool_rounds: 5
+  timeout: 90
+
+bot:
+  # 机器人显示名，用来剥掉消息里的「@前缀」，要和企微后台的名称一致
+  name: "数字分身"
+
+  # 日志文件（相对项目根目录）
+  log_file: "logs/bot.log"
+
+  # 已处理消息 ID 记录，用于重启后去重
+  state_file: "state/processed.json"

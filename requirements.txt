@@ -1,0 +1,7 @@
+# 数字分身 · 运行依赖
+# 安装：pip install -r requirements.txt
+# 已在 Python 3.13 上验证
+
+PyYAML>=6.0,<7.0
+requests>=2.31,<3.0
+websockets>=12.0,<18.0
