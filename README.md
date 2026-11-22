@@ -7,9 +7,13 @@
 ```text
 你：   @数字分身 commits payment-service main 5
 它：   ⏳ 收到，正在处理…
-它：   ### 📝 payment-service · main 最近 5 条提交
-       • a3f21c9 fix: 回调幂等判断漏了 orderId
-       • 8b1e044 feat: 增加退款重试
+它：   ### 📦 payment-service
+       **分支**：`main` ｜ 最近 5 条提交
+
+       **1.** `a3f21c9` fix: 回调幂等判断漏了 orderId
+       　　👤 张三 ｜ 🕐 11-16 10:55
+       **2.** `8b1e044` feat: 增加退款重试
+       　　👤 张三 ｜ 🕐 11-16 09:12
        …
 ```
 
@@ -41,19 +45,39 @@
 
 ## 30 秒验证，不需要任何密钥
 
+环境要求：**Python 3.10+**（代码使用了 `X | None` 联合类型语法），以及 Python 3.10+ 自带的 `venv`。
+
 ```bash
-pip install -r requirements.txt
-python selftest.py parse
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python selftest.py parse
 ```
 
-`parse` 只测指令解析，不连任何外部服务。看到类似下面的输出，说明代码是好的：
+`parse` 只测指令解析，不连任何外部服务。看到下面这样逐条打勾，说明代码是好的：
 
 ```text
-✅ 指令解析正常
-   commits payment-service main 5  →  ('commits', ['payment-service', 'main', '5'])
+─── 1. 指令解析 ───
+  ✅ 'commits fund-product main 5' → (commits, ['fund-product', 'main', '5'])
+  ✅ '提交 my-proj' → (commits, ['my-proj'])
+  ✅ '@数字分身 commits demo' → (commits, ['demo'])
+  ✅ 参数解析 commits myproj 99 → (myproj, master, 30)（数字=条数，截断到 30）
+  …
 ```
 
-其它分项自测：`python selftest.py gitlab` / `cli` / `ws`（`ws` 需要 Secret）。
+其它分项自测：`./.venv/bin/python selftest.py gitlab` / `cli` / `ws`（`ws` 需要 Secret）。
+
+### 实测到什么程度
+
+不夸大，逐项说清楚（2026-11，macOS + Python 3.13）：
+
+| 链路 | 状态 | 证据 |
+|---|---|---|
+| 指令解析 | ✅ 已实测 | `selftest.py parse` 12 项断言全过 |
+| GitLab 查询 | ✅ 已实测 | 真实实例取回提交记录并渲染推送 |
+| 长连接鉴权 | ✅ 已实测 | `aibot_subscribe` 返回 `errcode 0` |
+| 主动推送 | ✅ 已实测 | `aibot_send_msg` 返回 `errcode 0`，消息真实到达单聊 |
+| 群内 @ 触发 | ⚠️ 逻辑完整但未在群场景验证 | 单聊链路已通，群聊共用同一套回调处理 |
+| 本机 CLI 后端 | ⚠️ 视 CLI 版本而定 | 部分版本 `--serve`/`-p` 模式会初始化失败，改用 `llm` 后端更稳 |
 
 ## 5 分钟接入
 
@@ -78,6 +102,8 @@ chmod 600 config.yaml
 ```
 
 必填三处：`wecom.bot_id`、`wecom.secret`、`gitlab.token`（GitLab → Preferences → Access Tokens → 勾 `api`）。
+
+`gitlab.default_project` 建议填**完整路径**（如 `your-group/your-project`），不要只写项目名——GitLab 的 `/projects/:id` 只接受数字 ID 或完整路径，写短名会直接 404。
 
 自然语言的活儿可选两种后端：直连大模型（`llm.api_key`），或调用本机 CLI（`workbuddy.cli_path`）。都不配也不影响内置指令。
 
@@ -108,11 +134,15 @@ tail -f logs/bot.log      # 看到「长连接建立完成，等待群消息…�
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `850003 authorization expired` | 机器人未授权 | 创建者点授权链接 |
+| `853000 invalid bot_id or secret` | Secret 填错 | 回机器人详情页，确认复制的是**长连接**那栏的 Secret。注意它和 URL 回调模式的 Token / EncodingAESKey 长得一样长，肉眼分不出来，只能回去核对 |
+| `850003 authorization expired` | 机器人「消息」权限过期 | 创建者点一下授权链接续期。过期是常态，隔一段时间会失效 |
+| `850002 no authorization` | 「通讯录」权限未授权 | **不影响使用**。只有想按姓名反查 userid 才需要它；主动推送用 `message aibot sessions list` 拿 chatid 即可 |
+| GitLab 返回 404 | `default_project` 写成了短名 | 改成完整路径 `group/project`，或直接填项目数字 ID |
 | `853006` | 会话存档接口未对企业开通 | 与本项目无关。这也是必须走推送模式、不能主动拉群消息的原因 |
 | 两个实例互相踢下线 | 同一机器人只允许一个长连接 | 只跑一个；要冗余得做主备切换，不能并行 |
 | 指令回了「收到」但一直没结果 | 后台任务异常 | `tail -f logs/bot.log` 看堆栈；`status` 查后端是否就绪 |
 | 长消息被截断 | 企微 markdown 单条约 4096 字节 | 代码已在 3500 字节处主动截断并标注 |
+| 机器人无法主动发起第一条消息 | 企微协议限制 | `aibot_send_msg` 需要 `chatid`，而 `chatid` 只能从回调帧或 `sessions list` 拿到。冷启动时必须先有人跟机器人说过话 |
 
 ## 架构
 
