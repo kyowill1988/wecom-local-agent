@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
@@ -124,17 +125,28 @@ def test_ws(cfg):
         print(f"  {WARN} 未配置 wecom.secret，跳过")
         return
     bot = WecomBot(w["bot_id"], w["secret"], w.get("ws_url"), w.get("heartbeat_interval", 30))
-    result = {"auth": None}
+    result = {"auth": False, "error": None}
+
+    # 捕获鉴权失败的具体错误码，便于定位
+    class _ErrCatcher(logging.Handler):
+        def emit(self, record):
+            if record.levelno >= logging.ERROR:
+                result["error"] = record.getMessage()
+
+    logger = logging.getLogger("wecom")
+    catcher = _ErrCatcher()
+    logger.addHandler(catcher)
 
     async def run():
-        async def on_conn(frame):
-            result["auth"] = bot.authenticated
-
-        bot.on("connected", on_conn)
         task = asyncio.create_task(bot.connect_async())
+        # 注意：不要用 'connected' 事件判断鉴权结果。
+        # 该事件在发出订阅请求后立即触发，此时服务端响应还没回来，
+        # bot.authenticated 必然仍是 False，会误报失败。
+        # 正确做法是轮询 authenticated 直到成功或超时。
         for _ in range(30):
             await asyncio.sleep(0.5)
-            if result["auth"] is not None:
+            if bot.authenticated:
+                result["auth"] = True
                 break
         bot.disconnect()
         task.cancel()
@@ -143,11 +155,17 @@ def test_ws(cfg):
         except asyncio.CancelledError:
             pass
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        logger.removeHandler(catcher)
+
     if result["auth"]:
         print(f"  {OK} 长连接鉴权成功")
     else:
         print(f"  {FAIL} 鉴权未成功，请检查 Bot ID / Secret 及机器人「消息」权限授权状态")
+        if result["error"]:
+            print(f"       服务端返回: {result['error']}")
 
 
 # ---------------- main ----------------
