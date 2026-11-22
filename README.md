@@ -79,6 +79,10 @@ python3 -m venv .venv
 | 群内 @ 触发 | ⚠️ 逻辑完整但未在群场景验证 | 单聊链路已通，群聊共用同一套回调处理 |
 | 本机 CLI 后端 | ⚠️ 视 CLI 版本而定 | 部分版本 `--serve`/`-p` 模式会初始化失败，改用 `llm` 后端更稳 |
 
+主动推送的实机效果（这条是进程主动推的，不是收到消息后的自动回复）：
+
+![企业微信中收到的主动推送](docs/images/verified-push.png)
+
 ## 5 分钟接入
 
 ### 1. 创建机器人，拿 Bot ID 和 Secret
@@ -163,7 +167,7 @@ tail -f logs/bot.log      # 看到「长连接建立完成，等待群消息…�
 ## 目录结构
 
 ```text
-digital-twin/
+wecom-local-agent/
 ├── agent.py              # 守护进程：消息分发与编排
 ├── wecom_client.py       # 长连接客户端（鉴权 / 心跳 / 重连 / 收发）
 ├── executor.py           # 本机 CLI 执行器
@@ -173,7 +177,8 @@ digital-twin/
 │   └── gitlab_skill.py   # GitLab 查询与结果格式化
 ├── selftest.py           # 分项自测
 ├── config.example.yaml   # 配置模板（真实配置见 config.yaml，已被 git 忽略）
-└── start.sh / stop.sh
+├── start.sh / stop.sh
+└── docs/images/          # README 配图
 ```
 
 ## 设计取舍
