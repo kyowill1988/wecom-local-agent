@@ -94,6 +94,7 @@ class WecomBot:
             ping_interval=None,   # 自己维护心跳
             ping_timeout=None,
             max_size=20 * 1024 * 1024,
+            proxy=None,           # 强制直连，绕过系统代理（企微是国内服务器，无需代理）
         ) as ws:
             self.ws = ws
             self.authenticated = False
